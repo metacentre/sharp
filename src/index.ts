@@ -208,6 +208,12 @@ const plugin = {
                   )
                 })
               })
+              .catch((error: string) => {
+                const errorMsg = `[@metacentre/sharp] failed to transform blob. ${error}`
+                debug(errorMsg)
+                console.error(errorMsg)
+                return cb(errorMsg)
+              })
           }
         })
       )
