@@ -10,6 +10,7 @@ import base32 from 'base32'
 import mkdirp from 'mkdirp'
 import Debug from 'debug'
 import { MakeSrcSetOptions, SharpResizeOptions } from './types'
+import { haveBlob, findKeyInObject } from './utils'
 // import Keyv from 'keyv'
 // import { KeyvFile } from 'keyv-file'
 
@@ -25,10 +26,27 @@ const plugin = {
     process: 'sync'
   },
   init(rpc: any, config: any) {
-    debug(`[${pkg.name}] v${pkg.version} init`)
+    debug(`[${pkg.name} v${pkg.version}] init`)
 
     const imageDir = join(config.path, 'sharp', 'images')
     mkdirp.sync(imageDir)
+
+    const format = config.sharp?.format
+    const sizes = config.sharp?.sizes
+    if (!format || !sizes)
+      throw new Error(`
+        [${pkg.name} v${pkg.version}] 
+        Did you forget to set sharp config in ~/.ssb/config ?
+        
+        You can set something like this. Format is webp | png | avif
+        {
+          "sharp": {
+            "format": "webp",
+            "sizes": [300, 600, 1024]
+          }
+        }
+        
+        `)
 
     // const store = new Keyv({
     //   store: new KeyvFile({
@@ -124,8 +142,8 @@ const plugin = {
       imageQueue.forEach(blobId => {
         const images = makeSrcSet({
           blobId,
-          sizes: [300, 400, 500],
-          format: 'webp'
+          sizes,
+          format
         })
         pull(
           images,
@@ -136,7 +154,7 @@ const plugin = {
     }
 
     function makeSrcSet(options: MakeSrcSetOptions) {
-      const { blobId, sizes = [300, 400, 500], format = 'webp' } = options
+      const { blobId, sizes, format } = options
       const source = pull(
         pull.values(sizes),
         paramap((size: number, cb: Function) => {
@@ -153,14 +171,14 @@ const plugin = {
 
     async function resize(options: SharpResizeOptions, cb: Function) {
       cb = cb ?? console.log
-      const { blobId, size = 500, format = 'webp' } = options
+      const { blobId, size, format } = options
       debug('resize called with', options)
       if (!isBlobId(blobId)) {
         const error = `[@metacentre/sharp] Error at get(blobId) is not a valid blob id ${blobId}`
         return cb(error)
       }
 
-      const blobFound = await haveBlob(blobId)
+      const blobFound = await haveBlob(rpc, blobId)
       if (!blobFound) {
         /** ask for the missing blob and continue */
         rpc.blobs.want(blobId)
@@ -180,13 +198,15 @@ const plugin = {
           return sharp(Buffer.concat(bufferArray))
             .resize(Number(size), Number(size))
             .webp()
+        if (format === 'avif')
+          return sharp(Buffer.concat(bufferArray))
+            .resize(Number(size), Number(size))
+            .avif()
         if (format === 'png')
           return sharp(Buffer.concat(bufferArray))
             .resize(Number(size), Number(size))
             .png()
       }
-
-      //    <img srcset="/_app/assets/pancake-banana-walnut-caramel-88ea27dd.webp 300w, /_app/assets/pancake-banana-walnut-caramel-e442e09e.webp 400w, /_app/assets/pancake-banana-walnut-caramel-333799d0.webp 500w" alt="High energy pancake topped with grilled banana, walnut, and drizzled with salted caramel">
 
       pull(
         bufferStream,
@@ -194,49 +214,34 @@ const plugin = {
           if (error) {
             return cb(error)
           } else {
-            transform(bufferArray)
-              .toBuffer()
-              .then(imgBuffer => {
-                writeFile(join(imageDir, filename), imgBuffer, error => {
-                  if (error) {
-                    const errorMsg = `[@metacentre/sharp] Error writing transformed image to disk ${error}`
-                    return cb(errorMsg)
-                  }
-                  cb(null, { id: blobId, filename, size })
-                  debug(
-                    `Successfully transformed ${blobId} to ${size}px and wrote to ${filename}`
-                  )
+            try {
+              transform(bufferArray)
+                .toBuffer()
+                .then(imgBuffer => {
+                  writeFile(join(imageDir, filename), imgBuffer, error => {
+                    if (error) {
+                      const errorMsg = `[@metacentre/sharp] Error writing transformed image to disk ${error}`
+                      return cb(errorMsg)
+                    }
+                    cb(null, { id: blobId, filename, size })
+                    console.log(
+                      `Successfully transformed ${blobId} to ${size}px and wrote to ${filename}`
+                    )
+                  })
                 })
-              })
-              .catch((error: string) => {
-                const errorMsg = `[@metacentre/sharp] failed to transform blob. ${error}`
-                debug(errorMsg)
-                console.error(errorMsg)
-                return cb(errorMsg)
-              })
+                .catch((error: any) =>
+                  console.log(
+                    `[@metacentre/sharp] error transforming image buffer ${error}`
+                  )
+                )
+            } catch (error) {
+              const errorMsg = `[@metacentre/sharp] failed to transform blob. ${error}`
+              debug(errorMsg)
+              console.error(errorMsg)
+              return cb(errorMsg)
+            }
           }
         })
-      )
-    }
-
-    /** get blob or ask our peers for it and continue */
-    function haveBlob(blobId: BlobId) {
-      return new Promise((resolve, reject) => {
-        rpc.blobs.has(blobId, (error: string, haveBlob: boolean) => {
-          if (error) {
-            const errorMsg = `[@metacentre/sharp] Error querying rpc.blobs.has for ${blobId}`
-            reject(errorMsg)
-          }
-          if (haveBlob) {
-            debug(
-              `[@metacentre/sharp] found blob to process ${blobId} ${haveBlob}`
-            )
-            resolve(true)
-          }
-          reject(`[@metacentre/sharp] blob not found ${blobId}`)
-        })
-      }).catch(error =>
-        debug(`[@metacentre/sharp] Caught haveBlob() error ${error}`)
       )
     }
 
@@ -245,20 +250,3 @@ const plugin = {
 }
 
 export = plugin
-
-function findKeyInObject(obj = {}, key: string): any[] {
-  const result: any[] = []
-  function search(obj = {}) {
-    if (!obj || typeof obj !== 'object') {
-      return
-    }
-    if (obj[key]) {
-      result.push(obj[key])
-    }
-    Object.keys(obj).forEach(k => {
-      search(obj[k])
-    })
-  }
-  search(obj)
-  return result
-}

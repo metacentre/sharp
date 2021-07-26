@@ -3,11 +3,11 @@ import { BlobId } from 'ssb-typescript'
 export interface MakeSrcSetOptions {
   blobId: BlobId
   sizes: number[]
-  format?: 'webp' | 'png'
+  format?: 'webp' | 'avif' | 'png'
 }
 
 export interface SharpResizeOptions {
   blobId: BlobId
-  size?: number
-  format?: 'webp' | 'png'
+  size: number
+  format: 'webp' | 'avif' | 'png'
 }
