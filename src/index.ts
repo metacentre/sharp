@@ -1,3 +1,5 @@
+import { haveBlob, findKeyInObject, checkImageStore, storeImageBlob } from './utils'
+import { MakeSrcSetOptions, SharpResizeOptions } from './types'
 import pull, { Source } from 'pull-stream'
 import paramap from 'pull-paramap'
 import { isBlobId } from 'ssb-ref'
@@ -9,17 +11,15 @@ import { writeFile } from 'fs'
 import base32 from 'base32'
 import mkdirp from 'mkdirp'
 import Debug from 'debug'
-import { MakeSrcSetOptions, SharpResizeOptions } from './types'
-import { haveBlob, findKeyInObject } from './utils'
-// import Keyv from 'keyv'
-// import { KeyvFile } from 'keyv-file'
+import { KeyvFile } from 'keyv-file'
+import Keyv from 'keyv'
 
 const debug = Debug('plugins:sharp')
 const pkg = require('../package.json')
 
 const plugin = {
   name: 'sharp',
-  version: require('../package.json').version,
+  version: pkg.version,
   manifest: {
     resize: 'async',
     makeSrcSet: 'source',
@@ -28,7 +28,8 @@ const plugin = {
   init(rpc: any, config: any) {
     debug(`[${pkg.name} v${pkg.version}] init`)
 
-    const imageDir = join(config.path, 'sharp', 'images')
+    const sharpDir = join(config.path, 'sharp')
+    const imageDir = join(sharpDir, 'images')
     mkdirp.sync(imageDir)
 
     const format = config.sharp?.format
@@ -48,21 +49,19 @@ const plugin = {
         
         `)
 
-    // const store = new Keyv({
-    //   store: new KeyvFile({
-    //     filename: join(imageDir, 'store.json'),
-    //     expiredCheckDelay: 24 * 3600 * 1000, // ms, check and remove expired data in each ms
-    //     writeDelay: 100, // ms, batch write to disk in a specific duration, enhance write performance.
-    //     encode: JSON.stringify, // serialize function
-    //     decode: JSON.parse // deserialize function
-    //   })
-    // })
-    // store.on('error', error =>
-    //   console.log(
-    //     '[@metacentre/sharp] Error connecting to persistent keyv store',
-    //     error
-    //   )
-    // )
+    const store: Keyv<any> = new Keyv({
+      namespace: 'sharp',
+      store: new KeyvFile({
+        filename: join(sharpDir, 'store.json'),
+        expiredCheckDelay: 24 * 3600 * 1000, // ms, check and remove expired data in each ms
+        writeDelay: 100, // ms, batch write to disk in a specific duration, enhance write performance.
+        encode: JSON.stringify, // serialize function
+        decode: JSON.parse // deserialize function
+      })
+    })
+    store.on('error', (error: any) =>
+      console.error('[@metacentre/sharp] Error connecting to persistent keyv store', error)
+    )
 
     let imageQueue: string[] = []
     const imageSet: any = {}
@@ -95,6 +94,7 @@ const plugin = {
         const blog = findKeyInObject(data, 'blog')
         const summary = findKeyInObject(data, 'summary')
         const markdown = [...text, ...blog, ...summary]
+
         if (haveData(markdown)) {
           const matches = mdImageRegex.exec(JSON.stringify(markdown))
           if (matches) {
@@ -172,38 +172,65 @@ const plugin = {
     async function resize(options: SharpResizeOptions, cb: Function) {
       cb = cb ?? console.log
       const { blobId, size, format } = options
+
       debug('resize called with', options)
       if (!isBlobId(blobId)) {
         const error = `[@metacentre/sharp] Error at get(blobId) is not a valid blob id ${blobId}`
         return cb(error)
       }
 
+      /**
+       * check the store for if we've previously resized this blob
+       * */
+
+      const { metadata, found } = await checkImageStore({ store, blobId, format, size })
+      if (found) {
+        /** if found, then we've already processed this image at this format and size, so callback */
+        const [format, size, filename] = metadata
+        debug(`image already processed ${blobId} ${metadata}`)
+        return cb(null, { id: blobId, format, filename, size })
+      }
+      debug(`image already not processed ${blobId} ${metadata}`)
+
+      /**
+       * not resized previously, so check if we have the blob in the multiblob store
+       * */
       const blobFound = await haveBlob(rpc, blobId)
       if (!blobFound) {
-        /** ask for the missing blob and continue */
+        /**
+         * ask for the missing blob and continue
+         * it will end up processed at some later time
+         * if we are able to retrieve it
+         * */
         rpc.blobs.want(blobId)
         const msg = `Blob ${blobId} not found. Asking peers for it...`
         debug(msg)
         return cb(msg)
       }
 
-      const bufferStream: Source<Uint8Array[]> = rpc.blobs.get(blobId)
-      if (!bufferStream)
-        return cb(`[@metacentre/sharp] Error getting blob ${blobId}...`)
+      /** we have the blob so let's resize it */
+      const bufferStream: Source<readonly Uint8Array[][]> = rpc.blobs.get(blobId)
+      // const bufferStream: Source<Uint8Array[]> = rpc.blobs.get(blobId)
+      if (!bufferStream) return cb(`[@metacentre/sharp] Error getting blob ${blobId}...`)
 
+      /** encode the blobId to base32 so it's filename and url safe */
       const filename = `${base32.encode(blobId)}.${size}.${format}`
 
-      const transform = (bufferArray: Uint8Array[]) => {
+      // prettier-ignore
+      const transform = (bufferArray: readonly Uint8Array[] ) => {
         if (format === 'webp')
-          return sharp(Buffer.concat(bufferArray))
+          return sharp(
+            Buffer.concat(bufferArray))
             .resize(Number(size), Number(size))
             .webp()
         if (format === 'avif')
-          return sharp(Buffer.concat(bufferArray))
+          return sharp(
+            Buffer.concat(bufferArray))
             .resize(Number(size), Number(size))
             .avif()
         if (format === 'png')
-          return sharp(Buffer.concat(bufferArray))
+          return sharp(
+            Buffer.concat(bufferArray))
             .resize(Number(size), Number(size))
             .png()
       }
@@ -218,22 +245,19 @@ const plugin = {
               transform(bufferArray)
                 .toBuffer()
                 .then(imgBuffer => {
-                  writeFile(join(imageDir, filename), imgBuffer, error => {
-                    if (error) {
-                      const errorMsg = `[@metacentre/sharp] Error writing transformed image to disk ${error}`
-                      return cb(errorMsg)
-                    }
-                    cb(null, { id: blobId, filename, size })
-                    console.log(
-                      `Successfully transformed ${blobId} to ${size}px and wrote to ${filename}`
-                    )
-                  })
+                  if (imgBuffer) {
+                    writeFile(join(imageDir, filename), imgBuffer, error => {
+                      if (error) {
+                        const errorMsg = `[@metacentre/sharp] Error writing transformed image to disk ${error}`
+                        return cb(errorMsg)
+                      }
+                      storeImageBlob({ store, id: blobId, format, size, filename })
+                      cb(null, { id: blobId, format, filename, size })
+                      debug(`Successfully transformed ${blobId} to ${size}px and wrote to ${filename}`)
+                    })
+                  }
                 })
-                .catch((error: any) =>
-                  console.log(
-                    `[@metacentre/sharp] error transforming image buffer ${error}`
-                  )
-                )
+                .catch((error: any) => console.error(`[@metacentre/sharp] error transforming image buffer ${error}`))
             } catch (error) {
               const errorMsg = `[@metacentre/sharp] failed to transform blob. ${error}`
               debug(errorMsg)

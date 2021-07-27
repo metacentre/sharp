@@ -1,4 +1,5 @@
 import { BlobId } from 'ssb-typescript'
+import { CheckImageStoreProps, CheckImageStoreValue, StoreImageBlobProps } from './types'
 import Debug from 'debug'
 
 const debug = Debug('plugins:sharp')
@@ -16,9 +17,7 @@ export function haveBlob(rpc: any, blobId: BlobId) {
       }
       reject(`[@metacentre/sharp] blob not found ${blobId}`)
     })
-  }).catch(error =>
-    debug(`[@metacentre/sharp] Caught haveBlob() error ${error}`)
-  )
+  }).catch(error => debug(`[@metacentre/sharp] Caught haveBlob() error ${error}`))
 }
 
 export function findKeyInObject(obj = {}, key: string): any[] {
@@ -36,4 +35,31 @@ export function findKeyInObject(obj = {}, key: string): any[] {
   }
   search(obj)
   return result
+}
+
+export function checkImageStore(props: CheckImageStoreProps): Promise<CheckImageStoreValue> {
+  const { store, blobId, format, size } = props
+
+  return new Promise(async resolve => {
+    const imageMetadata = await store.get(blobId)
+
+    if (Array.isArray(imageMetadata)) {
+      imageMetadata.forEach(metadata => {
+        const [storedFormat, storedSize, storedFilename] = metadata
+        if (storedSize === size && storedFormat === format) resolve({ found: true, metadata })
+      })
+      resolve({ found: false, metadata: imageMetadata })
+    }
+    resolve({ found: false, metadata: [] })
+  })
+}
+
+export async function storeImageBlob(props: StoreImageBlobProps) {
+  const { store, id, format, size, filename } = props
+  const imageMetadata = await store.get(id)
+
+  if (Array.isArray(imageMetadata)) {
+    imageMetadata.push([format, size, filename])
+    store.set(id, imageMetadata)
+  } else store.set(id, [[format, size, filename]])
 }
