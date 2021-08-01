@@ -1,6 +1,9 @@
 import { haveBlob, findKeyInObject, checkImageStore, storeImageBlob } from './utils'
 import { MakeSrcSetOptions, SharpResizeOptions, CheckImageStoreValue } from './types'
 import pull, { Source } from 'pull-stream'
+import pullFile from 'pull-file'
+import fse from 'fs-extra'
+import toPull from 'stream-to-pull-stream'
 import paramap from 'pull-paramap'
 import { isBlobId } from 'ssb-ref'
 import { BlobId } from 'ssb-typescript'
@@ -37,20 +40,6 @@ const plugin = {
 
     const format = config.sharp?.format
     const sizes = config.sharp?.sizes
-    if (!format || !sizes)
-      throw new Error(`
-        [${pkg.name} v${pkg.version}] 
-        Did you forget to set sharp config in ~/.ssb/config ?
-        
-        You can set something like this. Format is webp | png | avif
-        {
-          "sharp": {
-            "format": "webp",
-            "sizes": [300, 600, 1024]
-          }
-        }
-        
-        `)
 
     const store: Keyv<any> = new Keyv({
       namespace: 'sharp',
@@ -80,6 +69,21 @@ const plugin = {
 
     /** process message looking for images in data */
     function process(data: any) {
+      if (!format || !sizes)
+        throw new Error(`
+        [${pkg.name} v${pkg.version}] 
+        Did you forget to set sharp config in ~/.ssb/config ?
+        
+        You can set something like this. Format is webp | png | avif
+        {
+          "sharp": {
+            "format": "webp",
+            "sizes": [300, 600, 1024]
+          }
+        }
+        
+        `)
+
       const mdImageRegex = /!\[(.*?)\]\((.*?)\)/g
 
       /** adapted from ssb-ref. thanks! :) */
@@ -282,6 +286,24 @@ const plugin = {
           if (data) resolve({ found: true, metadata: data })
           else resolve({ found: false })
         })
+      })
+    }
+
+    /** optionally serve images */
+    if (config.sharp?.serve?.ws) {
+      if (!rpc.ws) console.error('[@metacentre/sharp] ssb-ws must be installed to serve sharp images')
+
+      rpc.ws.use((req, res, next) => {
+        if (req.url.startsWith('/sharp/images')) {
+          const filepath = join(config.path, req.url)
+
+          fse.pathExists(filepath, (error, exists) => {
+            if (error || !exists) {
+              res.writeHead(404)
+              next()
+            } else pull(pullFile(filepath), toPull.sink(res))
+          })
+        } else next()
       })
     }
 
