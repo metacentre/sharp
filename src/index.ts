@@ -1,5 +1,5 @@
 import { haveBlob, findKeyInObject, checkImageStore, storeImageBlob } from './utils'
-import { MakeSrcSetOptions, SharpResizeOptions } from './types'
+import { MakeSrcSetOptions, SharpResizeOptions, CheckImageStoreValue } from './types'
 import pull, { Source } from 'pull-stream'
 import paramap from 'pull-paramap'
 import { isBlobId } from 'ssb-ref'
@@ -17,15 +17,18 @@ import Keyv from 'keyv'
 const debug = Debug('plugins:sharp')
 const pkg = require('../package.json')
 
+type Ssb = any
+
 const plugin = {
   name: 'sharp',
   version: pkg.version,
   manifest: {
     resize: 'async',
     makeSrcSet: 'source',
-    process: 'sync'
+    process: 'sync',
+    getBlobMetadata: 'async'
   },
-  init(rpc: any, config: any) {
+  init(rpc: Ssb, config: any) {
     debug(`[${pkg.name} v${pkg.version}] init`)
 
     const sharpDir = join(config.path, 'sharp')
@@ -257,7 +260,7 @@ const plugin = {
                     })
                   }
                 })
-                .catch((error: any) => console.error(`[@metacentre/sharp] error transforming image buffer ${error}`))
+                .catch((error: any) => debug(`[@metacentre/sharp] error transforming image buffer ${error}`))
             } catch (error) {
               const errorMsg = `[@metacentre/sharp] failed to transform blob. ${error}`
               debug(errorMsg)
@@ -269,7 +272,20 @@ const plugin = {
       )
     }
 
-    return { resize, makeSrcSet, process }
+    function getBlobMetadata(blobId: BlobId): Promise<CheckImageStoreValue> {
+      return new Promise((resolve, reject) => {
+        if (!isBlobId(blobId)) {
+          const error = `[@metacentre/sharp] getMetadata(blobId: BlobId) arg is not a valid blobId: ${blobId}`
+          reject(error)
+        }
+        store.get(blobId).then(data => {
+          if (data) resolve({ found: true, metadata: data })
+          else resolve({ found: false })
+        })
+      })
+    }
+
+    return { resize, makeSrcSet, process, getBlobMetadata }
   }
 }
 

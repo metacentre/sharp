@@ -5,10 +5,8 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "prepare": "tsc",
     "build": "tsc",
-    "start": "tsc -w",
-    "prepublish": "npm run build"
+    "start": "tsc -w"
   },
   "keywords": [
     "sharp",
@@ -27,12 +25,12 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^16.4.0",
+    "@types/node": "^16.4.9",
     "@types/pull-stream": "^3.6.2",
-    "@types/debug": "^4.1.6",
+    "@types/debug": "^4.1.7",
     "@types/keyv": "^3.1.2",
     "@types/mkdirp": "^1.0.2",
-    "@types/sharp": "^0.28.4",
+    "@types/sharp": "^0.28.5",
     "debug": "^4.3.2",
     "husky": "^7.0.1",
     "prettier": "^2.3.2",

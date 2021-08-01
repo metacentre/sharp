@@ -18,7 +18,7 @@ export type ImageMetadata = [ImageMetadataItem]
 
 export interface CheckImageStoreValue {
   found: boolean
-  metadata: ImageMetadata[]
+  metadata?: ImageMetadata[]
 }
 export interface StoreImageBlobProps {
   store: Keyv<any>

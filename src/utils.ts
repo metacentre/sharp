@@ -4,7 +4,9 @@ import Debug from 'debug'
 
 const debug = Debug('plugins:sharp')
 
-export function haveBlob(rpc: any, blobId: BlobId) {
+type Ssb = any
+
+export function haveBlob(rpc: Ssb, blobId: BlobId) {
   return new Promise((resolve, reject) => {
     rpc.blobs.has(blobId, (error: string, haveBlob: boolean) => {
       if (error) {
@@ -37,9 +39,7 @@ export function findKeyInObject(obj = {}, key: string): any[] {
   return result
 }
 
-export function checkImageStore(props: CheckImageStoreProps): Promise<CheckImageStoreValue> {
-  const { store, blobId, format, size } = props
-
+export function checkImageStore({ store, blobId, format, size }: CheckImageStoreProps): Promise<CheckImageStoreValue> {
   return new Promise(async resolve => {
     const imageMetadata = await store.get(blobId)
 
